@@ -1,0 +1,4 @@
+# Для запуска youtube_import.py на MacBook
+yt-dlp
+youtube-transcript-api
+requests

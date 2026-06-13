@@ -1,0 +1,3 @@
+libsql-experimental
+numpy
+python-dotenv

@@ -1,0 +1,5 @@
+libsql-experimental
+telethon
+numpy
+python-dotenv
+requests
