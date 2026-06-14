@@ -1,3 +1,5 @@
+Git diff пустой, изменений за эту неделю нет. Но в структуре файлов обнаружены `handlers/analyze.py` и `transcribe.py`, которые не отражены в текущей архитектуре. Обновляю секцию handlers бота и добавляю transcribe.py.
+
 # content-brain — Архитектура
 
 ## Назначение
@@ -61,6 +63,10 @@ mood-diary Turso (entries + messages)
 │  03-bot/            │
 │  aiogram polling    │
 │                     │
+│  /analyze → запуск  │
+│  analyzer.py в фоне │
+│  /analyze_fast →    │
+│  без NLM (быстрый)  │
 │  /ideas → список    │
 │  выбор → пост       │
 │  /gextract → импорт │
@@ -169,7 +175,8 @@ python3 main.py --update  # инкрементальная: последние 3
 ## Анализатор (02-analyzer)
 
 ```bash
-python3 analyzer.py   # запустить анализ (без аргументов)
+python3 analyzer.py          # полный анализ с NotebookLM
+python3 analyzer.py --no-nlm # только дневник + Claude, без NLM
 ```
 
 **Двухэтапный процесс:**
@@ -186,14 +193,27 @@ python3 analyzer.py   # запустить анализ (без аргумент
 python3 main.py   # запуск polling
 ```
 
-**Структура handlers:**
+**Структура файлов:**
 
 | Файл | Назначение |
 |------|-----------|
+| `bot.py` | Создание `Bot` и `Dispatcher` (aiogram 3.x, parse_mode=HTML) |
+| `main.py` | Точка входа, polling |
+| `transcribe.py` | Трёхуровневая транскрипция: Groq → Finland VPS → faster-whisper tiny |
+| `handlers/analyze.py` | Команды `/analyze` и `/analyze_fast` — запуск `analyzer.py` в фоне через asyncio |
 | `handlers/ideas.py` | Команда `/ideas` — список идей со статусом 'new' |
 | `handlers/post_writer.py` | Генерация поста по выбранной идее через Claude CLI |
 | `handlers/channel_monitor.py` | Ловит `channel_post` → сохраняет в `cb_social_posts` + `cb_social_vectors` |
 | `handlers/gemini_import.py` | Команда `/gextract` — импорт Gemini-переписок в `content-brain-fresh` |
+
+**Команды бота:**
+
+| Команда | Что делает |
+|---------|-----------|
+| `/analyze` | Запускает `analyzer.py` в фоне (с NLM), уведомляет по завершении |
+| `/analyze_fast` | Запускает `analyzer.py --no-nlm` (быстрый, только Claude) |
+| `/ideas` | Показывает список идей со статусом 'new' |
+| `/gextract` | Импортирует Gemini-переписку в ноутбук `content-brain-fresh` |
 
 **Тон голоса:**
 - `strategy.md` — основной файл стратегии (заполнить вручную)
@@ -205,6 +225,9 @@ python3 main.py   # запуск polling
 Handler `channel_monitor.py` ловит `channel_post` → сохраняет в `cb_social_posts` + `cb_social_vectors`.
 
 **Генерация постов:** Claude CLI через `subprocess`, тон голоса из `strategy.md`.
+
+**Транскрипция в боте (`transcribe.py`):**
+Groq → Finland VPS (`http://2.26.85.234:5000/transcribe`, env `FINLAND_WHISPER_URL`) → faster-whisper tiny (локально). Используется обработчиками, требующими расшифровки голосовых.
 
 ## Переменные окружения
 
@@ -220,6 +243,7 @@ Handler `channel_monitor.py` ловит `channel_post` → сохраняет в
 | `TG_CHANNEL_USERNAME` | `nikbase` |
 | `GROQ_API_KEY` | Транскрипция голосовых |
 | `TELEGRAM_USER_ID` | ID владельца для уведомлений (5950805456) |
+| `FINLAND_WHISPER_URL` | URL Finland VPS whisper-service (по умолчанию `http://2.26.85.234:5000/transcribe`) |
 
 ## YouTube-импорт (MacBook)
 
@@ -246,6 +270,7 @@ python youtube_import.py --channel https://www.youtube.com/@НазваниеКа
 - Публикация в канал — пользователь делает вручную, бот только помечает идею как `used`
 - strategy.md — заполнить вручную, это критично для качества идей и постов
 - gemini_import.py (`/gextract`) — импортирует Gemini-переписки напрямую в ноутбук `content-brain-fresh`; после устаревания переписки удалить из fresh вручную
+- `/analyze_fast` — режим без NLM; полезен когда SSH-туннель недоступен или нужен быстрый результат (таймаут фоновой задачи — 15 минут)
 
 ## История изменений
 
@@ -257,4 +282,4 @@ python youtube_import.py --channel https://www.youtube.com/@НазваниеКа
 - 2026-06-02 — channel_monitor.py: автосбор новых постов @nikbase в БД
 - 2026-06-02 — добавлен YouTube в NLM (63 ролика); ноутбук content-brain-fresh для Gemini-переписок
 - 2026-06-02 — nlm_updater.py: автообновление NLM по крону (еженедельно + ежемесячно)
-- 2026-06-07 — handlers/gemini_import.py: команда /gextract для импорта Gemini-переписок в content-brain-fresh; extract_tone.py + tone_analysis.md: анализ и хранение тона голоса автора
+- 2026-06-07 — handlers/gemini_import.py: команда /gextract для импорта Gemini-переписок в content-brain-fresh; extract_tone.py + tone_analysis.md: анализ и хранение тона голоса автора; handlers/analyze.py: команды /analyze и /analyze_fast для запуска анализатора прямо из бота; transcribe.py: трёхуровневая транскрипция (Groq → Finland VPS → faster-whisper tiny) в 03-bot; analyzer.py --no-nlm: быстрый режим без NotebookLM
