@@ -132,13 +132,17 @@ def build_meanings_prompt(context: dict, strategy: str) -> str:
   {{
     "meaning": "чёткая формулировка смысла (1-2 предложения)",
     "quote": "фрагмент из записей, на который опираешься",
+    "source_date": "YYYY-MM-DD — точная дата из записей где это встретилось",
     "type": "ценность|позиция|боль|конфликт|трансформация|наблюдение|философия",
     "strategy_fit": "соответствует|частично|не задана",
     "needs_history": true,
     "history_query": "вопрос для поиска предыстории в архиве (если needs_history=true)",
     "content_potential": "пост|серия|reels|сторис"
   }}
-]"""
+]
+
+ВАЖНО: source_date — это РЕАЛЬНАЯ дата из предоставленных записей дневника выше (вида [YYYY-MM-DD]).
+Не придумывай дату. Если смысл из нескольких дней — укажи самую последнюю."""
 
     return prompt
 
@@ -222,7 +226,8 @@ def build_ideas_prompt(
     """
     meanings_block = []
     for i, m in enumerate(meanings, 1):
-        block = f"Смысл {i}: {m['meaning']}\nТип: {m['type']} | Потенциал: {m.get('content_potential', '?')}"
+        date_tag = f" (дата: {m['source_date']})" if m.get("source_date") else ""
+        block = f"Смысл {i}{date_tag}: {m['meaning']}\nТип: {m['type']} | Потенциал: {m.get('content_potential', '?')}"
         if m.get("quote"):
             block += f"\nЦитата: «{m['quote'][:200]}»"
 
@@ -268,9 +273,13 @@ def build_ideas_prompt(
   {{
     "title": "заголовок до 80 символов — цепляющий, конкретный",
     "thesis": "развёрнутый тезис: откуда взят смысл, угол подачи, поворот, почему актуально сейчас",
-    "source_dates": ["2026-06-01"],
+    "source_dates": ["YYYY-MM-DD"],
     "primary_source": "fresh_gemini|archive_gemini|diary"
   }}
-]"""
+]
+
+ВАЖНО для source_dates: используй ТОЛЬКО те даты, которые указаны в смыслах выше (в скобках "дата: YYYY-MM-DD").
+Если смысл взят из Gemini-переписок — source_dates может быть пустым [].
+Не придумывай даты."""
 
     return prompt
