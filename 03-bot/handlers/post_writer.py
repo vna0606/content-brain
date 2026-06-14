@@ -158,6 +158,19 @@ def _get_all_gemini_messages(conn) -> list[tuple[str, str]]:
         return []
 
 
+def _get_voice_samples(conn, limit: int = 5) -> list[str]:
+    """Загрузить примеры старых постов для voice calibration в гуманизаторе."""
+    try:
+        cur = conn.execute(
+            "SELECT content FROM cb_social_posts WHERE source_type = 'telegram' "
+            "ORDER BY published_at DESC LIMIT ?", (limit,)
+        )
+        return [r[0] for r in cur.fetchall() if r[0] and len(r[0]) > 100]
+    except Exception as e:
+        print(f"[post_writer] ошибка загрузки voice samples: {e}")
+        return []
+
+
 def _get_social_chunks(conn, relevant_social: list[str]) -> list[str]:
     chunks = []
     for source_id in relevant_social[:3]:
@@ -231,6 +244,7 @@ async def _generate_and_send(callback: CallbackQuery, idea_id: int, mode: str):
     idea_created_at = row[5] or ""
 
     await callback.answer("Генерирую пост...")
+    print(f"[post_writer] callback.data={callback.data!r} → mode={mode}")
 
     mode_labels = {
         "current": "Пишу пост (текущий режим)...",
@@ -295,16 +309,21 @@ async def _generate_and_send(callback: CallbackQuery, idea_id: int, mode: str):
     conn2.close()
 
     user_id = callback.from_user.id
-    _drafts[user_id] = {"idea_id": idea_id, "draft": post_text, "system": system}
+    _drafts[user_id] = {"idea_id": idea_id, "draft": post_text, "system": system, "mode": mode}
     _awaiting_feedback.pop(user_id, None)
 
-    await _send_draft(callback.message, post_text, idea_id)
+    await _send_draft(callback.message, post_text, idea_id, mode)
 
 
-async def _send_draft(message, post_text: str, idea_id: int):
+_MODE_TO_PREFIX = {"current": "write", "diary": "write_diary", "archive": "write_archive"}
+
+
+async def _send_draft(message, post_text: str, idea_id: int, mode: str = "current"):
+    regen_prefix = _MODE_TO_PREFIX.get(mode, "write")
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✏️ Улучшить (дать комментарий)", callback_data=f"improve:{idea_id}")],
-        [InlineKeyboardButton(text="🔄 Перегенерировать с нуля", callback_data=f"write:{idea_id}")],
+        [InlineKeyboardButton(text="🫀 Гуманизировать", callback_data=f"humanize:{idea_id}")],
+        [InlineKeyboardButton(text="🔄 Перегенерировать с нуля", callback_data=f"{regen_prefix}:{idea_id}")],
         [InlineKeyboardButton(text="❌ Отклонить идею", callback_data=f"dismiss:{idea_id}")],
     ])
 
@@ -315,6 +334,79 @@ async def _send_draft(message, post_text: str, idea_id: int):
         await message.answer(f"<i>{len(post_text)} символов</i>", reply_markup=keyboard)
     else:
         await message.answer(preview, reply_markup=keyboard, parse_mode="HTML")
+
+
+def _build_humanizer_system() -> str:
+    """Читает humanizer.md и возвращает системный промпт (без YAML frontmatter)."""
+    p = Path(__file__).parent.parent / "humanizer.md"
+    text = p.read_text(encoding="utf-8")
+    # Убираем YAML frontmatter (--- ... ---)
+    if text.startswith("---"):
+        end = text.index("---", 3)
+        text = text[end + 3:].lstrip()
+    return text + "\n\nВажно: пост написан на русском языке — применяй все правила к русскому тексту."
+
+
+def _humanize_sync(draft: str, voice_samples: list[str]) -> str:
+    """Прогнать черновик через гуманизатор с voice calibration."""
+    system = _build_humanizer_system()
+
+    voice_block = ""
+    if voice_samples:
+        samples_text = "\n\n---\n".join(voice_samples[:3])
+        voice_block = f"Voice calibration — примеры постов автора (его реальный стиль письма):\n\n{samples_text}\n\n"
+
+    user_prompt = (
+        f"{voice_block}"
+        f"Гуманизируй этот текст. Убери AI-паттерны, сохрани смысл и голос автора:\n\n{draft}"
+    )
+
+    env = {**os.environ, "HOME": os.path.expanduser("~")}
+    result = subprocess.run(
+        ["claude", "-p", "--system-prompt", system, "--model", CLAUDE_MODEL],
+        input=user_prompt,
+        capture_output=True, text=True, env=env, timeout=180,
+    )
+    if result.returncode != 0 and result.stderr:
+        print(f"[humanizer] stderr: {result.stderr[:200]}")
+    return result.stdout.strip()
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("humanize:"))
+async def cb_humanize(callback: CallbackQuery):
+    """Прогнать текущий черновик через гуманизатор."""
+    user_id = callback.from_user.id
+    idea_id = int(callback.data.split(":")[1])
+
+    stored = _drafts.get(user_id)
+    if not stored or stored.get("idea_id") != idea_id:
+        msg_text = callback.message.text or ""
+        draft = _extract_draft_from_message(msg_text)
+        if not draft:
+            await callback.answer("Черновик не найден — перегенерируй пост.")
+            return
+        from prompts import get_post_writer_system
+        stored = {"idea_id": idea_id, "draft": draft, "system": get_post_writer_system(), "mode": "current"}
+        _drafts[user_id] = stored
+
+    await callback.answer()
+    await callback.message.answer("🫀 Гуманизирую текст — убираю AI-паттерны...")
+
+    draft = stored["draft"]
+    conn = _get_cb_db()
+    voice_samples = _get_voice_samples(conn)
+    conn.close()
+
+    loop = asyncio.get_event_loop()
+    humanized = await loop.run_in_executor(None, _humanize_sync, draft, voice_samples)
+
+    if not humanized:
+        await callback.message.answer("Не удалось гуманизировать — попробуй ещё раз.")
+        return
+
+    mode = stored.get("mode", "current")
+    _drafts[user_id] = {**stored, "draft": humanized}
+    await _send_draft(callback.message, humanized, idea_id, mode)
 
 
 def _extract_draft_from_message(text: str) -> str:
@@ -382,7 +474,7 @@ async def _process_feedback(message: Message, user_id: int, feedback: str):
         return
 
     _drafts[user_id] = {**stored, "draft": improved}
-    await _send_draft(message, improved, idea_id)
+    await _send_draft(message, improved, idea_id, stored.get("mode", "current"))
 
 
 @router.message(F.voice)
