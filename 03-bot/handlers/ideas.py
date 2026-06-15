@@ -90,11 +90,14 @@ async def cb_select_idea(callback: CallbackQuery):
     conn.close()
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✍️ Написать пост (текущий режим)", callback_data=f"write:{idea_id}")],
-        [InlineKeyboardButton(text="📓 Только из дневника", callback_data=f"write_diary:{idea_id}")],
-        [InlineKeyboardButton(text="🔍 Из дневника + архив", callback_data=f"write_archive:{idea_id}")],
-        [InlineKeyboardButton(text="Пропустить", callback_data=f"dismiss:{idea_id}")],
-        [InlineKeyboardButton(text="Назад к списку", callback_data="back_to_ideas")],
+        [InlineKeyboardButton(text="📓 Claude — из дневника", callback_data=f"write_diary:{idea_id}"),
+         InlineKeyboardButton(text="🤖 Gemini — из дневника", callback_data=f"write_agy_diary:{idea_id}")],
+        [InlineKeyboardButton(text="⚡ Оба сразу — из дневника", callback_data=f"write_both_diary:{idea_id}")],
+        [InlineKeyboardButton(text="🔍 Claude — дневник + архив", callback_data=f"write_archive:{idea_id}"),
+         InlineKeyboardButton(text="🤖 Gemini — архив", callback_data=f"write_agy_archive:{idea_id}")],
+        [InlineKeyboardButton(text="✍️ Claude — полный режим (NLM)", callback_data=f"write:{idea_id}")],
+        [InlineKeyboardButton(text="❌ Пропустить", callback_data=f"dismiss:{idea_id}"),
+         InlineKeyboardButton(text="↩️ Назад", callback_data="back_to_ideas")],
     ])
 
     await callback.message.edit_text(f"<b>{title}</b>\n\n{thesis}", reply_markup=keyboard)
