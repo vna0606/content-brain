@@ -28,19 +28,21 @@ async def main():
     from handlers.analyze import router as analyze_router
     from handlers.ideas import router as ideas_router
     from handlers.post_writer import router as post_router
+    from handlers.format_writer import router as format_router
     from handlers.channel_monitor import router as monitor_router
     from handlers.gemini_import import router as gemini_router
 
     dp.include_router(analyze_router)
     dp.include_router(ideas_router)
     dp.include_router(post_router)
+    dp.include_router(format_router)
     dp.include_router(monitor_router)
     dp.include_router(gemini_router)
 
     await bot.set_my_commands([
         BotCommand(command="analyze", description="🔍 Полный анализ дневника + NotebookLM → идеи"),
         BotCommand(command="analyze_fast", description="⚡️ Быстрый анализ только по дневнику → идеи"),
-        BotCommand(command="ideas", description="💡 Показать готовые идеи для постов"),
+        BotCommand(command="ideas", description="💡 Показать идеи для контента"),
     ])
 
     logger.info("content-brain bot starting...")

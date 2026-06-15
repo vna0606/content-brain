@@ -89,6 +89,35 @@ async def cb_select_idea(callback: CallbackQuery):
     conn.sync()
     conn.close()
 
+    keyboard = _platform_keyboard(idea_id)
+    await callback.message.edit_text(
+        f"<b>{title}</b>\n\n{thesis}\n\n<i>Выбери формат:</i>",
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+def _platform_keyboard(idea_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📱 Telegram пост", callback_data=f"platform:telegram:{idea_id}")],
+        [InlineKeyboardButton(text="📹 Reels / Shorts", callback_data=f"platform:reels:{idea_id}")],
+        [InlineKeyboardButton(text="🎬 YouTube ролик", callback_data=f"platform:youtube:{idea_id}")],
+        [InlineKeyboardButton(text="❌ Пропустить", callback_data=f"dismiss:{idea_id}"),
+         InlineKeyboardButton(text="↩️ Назад", callback_data="back_to_ideas")],
+    ])
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("platform:telegram:"))
+async def cb_platform_telegram(callback: CallbackQuery):
+    idea_id = int(callback.data.split(":")[2])
+    conn = _get_db()
+    cur = conn.execute("SELECT title, thesis FROM cb_ideas WHERE id = ?", (idea_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        await callback.answer("Идея не найдена.")
+        return
+    title, thesis = row[0], row[1]
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📓 Claude — из дневника", callback_data=f"write_diary:{idea_id}"),
          InlineKeyboardButton(text="🤖 Gemini — из дневника", callback_data=f"write_agy_diary:{idea_id}")],
@@ -96,11 +125,12 @@ async def cb_select_idea(callback: CallbackQuery):
         [InlineKeyboardButton(text="🔍 Claude — дневник + архив", callback_data=f"write_archive:{idea_id}"),
          InlineKeyboardButton(text="🤖 Gemini — архив", callback_data=f"write_agy_archive:{idea_id}")],
         [InlineKeyboardButton(text="✍️ Claude — полный режим (NLM)", callback_data=f"write:{idea_id}")],
-        [InlineKeyboardButton(text="❌ Пропустить", callback_data=f"dismiss:{idea_id}"),
-         InlineKeyboardButton(text="↩️ Назад", callback_data="back_to_ideas")],
+        [InlineKeyboardButton(text="↩️ Назад", callback_data=f"idea:{idea_id}")],
     ])
-
-    await callback.message.edit_text(f"<b>{title}</b>\n\n{thesis}", reply_markup=keyboard)
+    await callback.message.edit_text(
+        f"<b>{title}</b>\n\n<i>📱 Telegram пост — выбери движок:</i>",
+        reply_markup=keyboard,
+    )
     await callback.answer()
 
 

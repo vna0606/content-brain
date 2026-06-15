@@ -841,11 +841,18 @@ async def _process_feedback(message: Message, user_id: int, feedback: str):
 
 @router.message(F.voice)
 async def on_feedback_voice(message: Message, bot: Bot):
-    """Голосовой фидбэк — работает для обоих движков (Claude и Antigravity)."""
+    """Голосовой фидбэк — роутит к Claude, Antigravity, Reels/YouTube или capture."""
     user_id = message.from_user.id
     is_claude = _awaiting_feedback.get(user_id)
     is_agy = _agy_awaiting_feedback.get(user_id)
-    if not is_claude and not is_agy:
+
+    from handlers.format_writer import _awaiting_reels_feedback, _awaiting_youtube_feedback, process_reels_feedback, process_youtube_feedback
+    is_reels = _awaiting_reels_feedback.get(user_id)
+    is_youtube = _awaiting_youtube_feedback.get(user_id)
+
+    if not any([is_claude, is_agy, is_reels, is_youtube]):
+        from handlers.capture import handle_voice_capture
+        await handle_voice_capture(message, bot)
         return
 
     await message.answer("🎤 Транскрибирую голосовое...")
@@ -861,17 +868,27 @@ async def on_feedback_voice(message: Message, bot: Bot):
 
     if is_agy:
         await _process_agy_feedback(message, user_id, feedback)
-    else:
+    elif is_claude:
         await _process_feedback(message, user_id, feedback)
+    elif is_reels:
+        await process_reels_feedback(message, user_id, feedback)
+    elif is_youtube:
+        await process_youtube_feedback(message, user_id, feedback)
 
 
 @router.message(F.text)
 async def on_feedback_text(message: Message):
-    """Текстовый фидбэк — работает для обоих движков (Claude и Antigravity)."""
+    """Текстовый фидбэк — роутит к Claude, Antigravity или Reels/YouTube."""
     user_id = message.from_user.id
     if _agy_awaiting_feedback.get(user_id):
         await _process_agy_feedback(message, user_id, message.text.strip())
     elif _awaiting_feedback.get(user_id):
         await _process_feedback(message, user_id, message.text.strip())
+    else:
+        from handlers.format_writer import _awaiting_reels_feedback, _awaiting_youtube_feedback, process_reels_feedback, process_youtube_feedback
+        if _awaiting_reels_feedback.get(user_id):
+            await process_reels_feedback(message, user_id, message.text.strip())
+        elif _awaiting_youtube_feedback.get(user_id):
+            await process_youtube_feedback(message, user_id, message.text.strip())
 
 
