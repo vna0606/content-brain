@@ -39,6 +39,36 @@ status           TEXT   -- 'new' | 'shown' | 'used' | 'dismissed'
 created_at       TEXT   -- ISO 8601
 ```
 
+## Параллельный поток: события/инфоповоды (events_analyzer.py)
+
+Отдельный скрипт `events_analyzer.py` — не смыслы, а конкретные факты из жизни
+(увольнение, решение, начало/завершение чего-то). Источник тот же дневник,
+но критерий обратный: то, что `MEANINGS_SYSTEM` явно исключает ("факт без позиции").
+
+Пишет в отдельную таблицу `cb_events` (не `cb_ideas`):
+```
+id             INTEGER PK
+title          TEXT   -- короткое название события
+description    TEXT   -- что произошло, конкретно, без выводов
+source_entries TEXT   -- JSON: список дат-источников
+status         TEXT   -- 'new' | 'shown' | 'used' | 'dismissed'
+created_at     TEXT   -- ISO 8601
+```
+
+Читается ботом (03-bot) через команду `/events` — отдельный флоу без суть/линзы,
+сразу к подбору форматов подачи. Запуск: `python events_analyzer.py`.
+
+### Тестовый вариант: события со стратегией (events_strategy_analyzer.py)
+
+Та же задача, но с подключённой `strategy.md` (через `load_strategy()` из `prompts.py`) —
+вычленяются только инфоповоды, которые подходят автору по теме/тону канала.
+Пишет в отдельную таблицу `cb_events_strategy` (та же схема, что у `cb_events`,
+не пересекается с лёгкой версией). Читается ботом через `/events_strategy`.
+Запуск: `python events_strategy_analyzer.py`.
+
+Цель — сравнить качество с лёгкой версией (`events_analyzer.py`) на практике;
+обе версии временно живут параллельно, пока не станет ясно, какая остаётся основной.
+
 ## Технический стек
 
 - Python 3.11+
@@ -53,7 +83,9 @@ created_at       TEXT   -- ISO 8601
 cd 02-analyzer/
 pip install -r requirements.txt
 # .env берётся из ../  или создаётся локальный
-python analyzer.py
+python analyzer.py                   # смыслы → идеи (cb_ideas)
+python events_analyzer.py            # события/инфоповоды, лёгкий (cb_events)
+python events_strategy_analyzer.py   # события/инфоповоды, со стратегией (cb_events_strategy)
 ```
 
 ## Что НЕ делает этот этап

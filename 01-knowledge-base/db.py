@@ -96,6 +96,22 @@ _DDL = [
         status           TEXT DEFAULT 'new',
         created_at       TEXT NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS cb_events (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        title          TEXT NOT NULL,
+        description    TEXT NOT NULL,
+        source_entries TEXT,
+        status         TEXT DEFAULT 'new',
+        created_at     TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS cb_events_strategy (
+        id             INTEGER PRIMARY KEY AUTOINCREMENT,
+        title          TEXT NOT NULL,
+        description    TEXT NOT NULL,
+        source_entries TEXT,
+        status         TEXT DEFAULT 'new',
+        created_at     TEXT NOT NULL
+    )""",
 ]
 
 

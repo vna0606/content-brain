@@ -69,3 +69,56 @@ class IdeaDraft:
             status=row[6] or "new",
             created_at=row[7],
         )
+
+
+@dataclass
+class EventDraft:
+    """
+    Черновик события/инфоповода — конкретный факт из жизни, не смысл.
+
+    Создаётся events_analyzer.py (02-analyzer), читается ботом (03-bot).
+    Хранится в отдельной таблице cb_events — параллельный поток к cb_ideas.
+    """
+
+    title: str
+    """Короткое название события (до 60 символов)."""
+
+    description: str
+    """Что произошло — конкретно, без выводов и философии."""
+
+    source_entries: List[str] = field(default_factory=list)
+    """Список дат записей дневника, породивших событие."""
+
+    status: str = "new"
+    """Статус: 'new' | 'shown' | 'used' | 'dismissed'."""
+
+    created_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+    """Время создания, ISO 8601."""
+
+    id: Optional[int] = None
+
+    def to_db_row(self) -> dict:
+        """Конвертировать в словарь для INSERT в cb_events."""
+        import json
+        return {
+            "title": self.title,
+            "description": self.description,
+            "source_entries": json.dumps(self.source_entries, ensure_ascii=False),
+            "status": self.status,
+            "created_at": self.created_at,
+        }
+
+    @classmethod
+    def from_db_row(cls, row) -> "EventDraft":
+        """Создать EventDraft из строки БД cb_events."""
+        import json
+        return cls(
+            id=row[0],
+            title=row[1],
+            description=row[2],
+            source_entries=json.loads(row[3] or "[]"),
+            status=row[4] or "new",
+            created_at=row[5],
+        )

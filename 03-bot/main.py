@@ -31,9 +31,15 @@ async def main():
     from handlers.format_writer import router as format_router
     from handlers.channel_monitor import router as monitor_router
     from handlers.gemini_import import router as gemini_router
+    from handlers.events import router as events_router
+    from handlers.events_strategy import router as events_strategy_router
+    from handlers.capture import router as capture_router
 
     dp.include_router(analyze_router)
     dp.include_router(ideas_router)
+    dp.include_router(events_router)
+    dp.include_router(events_strategy_router)
+    dp.include_router(capture_router)
     dp.include_router(post_router)
     dp.include_router(format_router)
     dp.include_router(monitor_router)
@@ -43,6 +49,10 @@ async def main():
         BotCommand(command="analyze", description="🔍 Полный анализ дневника + NotebookLM → идеи"),
         BotCommand(command="analyze_fast", description="⚡️ Быстрый анализ только по дневнику → идеи"),
         BotCommand(command="ideas", description="💡 Показать идеи для контента"),
+        BotCommand(command="analyze_events", description="📍 Найти события/инфоповоды (лёгкий, без стратегии)"),
+        BotCommand(command="events", description="🎬 Показать события → лёгкий контент"),
+        BotCommand(command="analyze_events_strategy", description="📍 Найти события/инфоповоды (со стратегией)"),
+        BotCommand(command="events_strategy", description="🎯 Показать события (со стратегией) → контент"),
     ])
 
     logger.info("content-brain bot starting...")

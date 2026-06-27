@@ -10,6 +10,7 @@ from pathlib import Path
 _DIR = Path(__file__).parent
 _tone_cache: str | None = None
 _strategy_cache: str | None = None
+_lens_cache: str | None = None
 
 
 def load_tone_guide() -> str:
@@ -31,6 +32,14 @@ def load_strategy() -> str:
         except FileNotFoundError:
             _strategy_cache = ""
     return _strategy_cache
+
+
+def load_lens() -> str:
+    global _lens_cache
+    if _lens_cache is None:
+        p = _DIR / "lens.md"
+        _lens_cache = p.read_text(encoding="utf-8") if p.exists() else ""
+    return _lens_cache
 
 
 def get_post_writer_system() -> str:
@@ -171,6 +180,7 @@ def build_post_prompt(
     social_chunks: list[str],
     gemini_messages: list[tuple[str, str]] | None = None,
     nlm_quotes: str = "",
+    selected_approach: str = "",
 ) -> str:
     """
     Промпт для генерации поста.
@@ -182,6 +192,11 @@ def build_post_prompt(
 
 Тезис (это ФИЛЬТР — используй из источников ТОЛЬКО то, что прямо развивает эту мысль):
 {thesis}
+
+"""
+    if selected_approach:
+        prompt += f"""ВЫБРАННЫЙ УГОЛ ПОДАЧИ (строго следуй ему — это главное ограничение):
+{selected_approach}
 
 """
 

@@ -2,9 +2,9 @@
 
 ## Цель проекта
 
-Превращать записи личного дневника (mood-diary) в идеи и готовые посты для Telegram-канала @nikbase.
-Двухэтапный анализ: сначала Claude извлекает смыслы из записей последних 7 дней,
-потом NotebookLM находит предысторию, потом Claude пишет пост в тон голоса автора.
+Превращать записи личного дневника (mood-diary) в контент для личного бренда.
+Поддерживаемые платформы: Telegram-канал @nikbase, Reels/Shorts, YouTube.
+Двигатели генерации — Claude CLI и Antigravity (Gemini) — доступны на каждом шаге.
 
 ## Архитектура — поток данных
 
@@ -24,22 +24,105 @@ mood-diary Turso                 Telegram @nikbase (Telethon)
                          ▼
               ┌─────────────────────┐        ┌──────────────────────┐
               │    02-analyzer      │◄───────│  NotebookLM (nlm)    │
-              │  analyzer.py        │        │  ноутбук content-    │
-              │                     │        │  brain: 5 источников │
+              │  analyzer.py        │        │  content-brain-fresh │
+              │                     │        │  + content-brain     │
               │  1. Claude → смыслы │        └──────────────────────┘
               │  2. NLM → история   │
               │  3. Claude → идеи   │
               └──────────┬──────────┘
                          │ cb_ideas (status='new')
                          ▼
-              ┌─────────────────────┐
-              │      03-bot         │
-              │  aiogram 3.x        │
-              │  /ideas → выбор     │
-              │  → Claude пост      │
-              │  по strategy.md     │
-              └─────────────────────┘
+              ┌─────────────────────────────────────────┐
+              │              03-bot                     │
+              │  aiogram 3.x polling                    │
+              │                                         │
+              │  /ideas → смысл-экран → варианты подачи │
+              │  → стратегия → платформа → генерация    │
+              │                                         │
+              │  Голосовой/текстовый захват вне режима  │
+              │  фидбека → capture.py → новые идеи      │
+              └─────────────────────────────────────────┘
 ```
+
+## Флоу работы в боте (03-bot)
+
+### Основной путь: идея → контент
+
+```
+/ideas
+  → список идей (статус 'new'/'shown')
+  → выбрал идею
+  → ЭКРАН СМЫСЛА (thesis screen)
+      [📓 Уточнить суть]  [🤖 Уточнить суть]   ← модель шлифует сырые мысли в тезис
+      [🎯 Варианты (Claude)] [🤖 Варианты (Gemini)]  ← 2-3 альтернативных угла
+      [📊 Стратегия (Claude)] [🤖 Стратегия (Gemini)] ← проверка по strategy.md
+      [📱 Telegram] [📹 Reels] [🎬 YouTube]       ← выбор платформы
+
+Если Telegram:
+  → движок [📓 Claude / 🤖 Gemini / ⚡ Оба] по одному из режимов:
+      write_diary    — только дневник
+      write_archive  — дневник + исторический контекст из NLM
+      write          — NLM fresh (приоритет) + дневник
+  → черновик пост → [улучшить / гуманизировать / перегенерировать / ♻️ в Reels/YouTube]
+
+Если Reels:
+  → [📓 Форматы через Claude] [🤖 Форматы через Gemini]
+  → 2-3 нарративных формата (До/после / Парадокс-разворот / Один момент под лупой / ...)
+  → выбрал формат
+  → [📓 Claude] [🤖 Gemini] [⚡ Оба сразу]
+  → сценарий Reels → [улучшить / гуманизировать / ♻️ переделать в TG-пост]
+
+Если YouTube:
+  → [📓 Claude] [🤖 Gemini] [⚡ Оба сразу]
+  → структура ролика (название + хук + 3-5 блоков + финал)
+  → [улучшить / гуманизировать / ♻️ переделать в TG-пост]
+```
+
+### Захват мыслей (capture)
+
+Голосовое или текстовое сообщение вне режима фидбека:
+```
+голос/текст → capture.py → сохранили в cb_voice_captures → спросили режим и движок
+  (каждый режим — Claude или Gemini):
+
+  💡 Идея                      → cb_ideas (source_type='voice', со стратегией)
+  📍 Событие (лёгкое)           → cb_events
+  📍 Событие (со стратегией)    → cb_events_strategy
+  🎯 Идея + событие (лёгкое)    → оба извлечения выше
+  🎯 Идея + событие (стратегия) → идея + событие со стратегией
+  🎯 Все три                    → идея + событие лёгкое + событие со стратегией
+
+  → показываем кнопки → ведут в экраны идеи (/ideas), события (/events)
+    или события со стратегией (/events_strategy)
+```
+
+Идея-экстракция подтягивает `strategy.md` (как и в `/analyze`); событие-экстракция
+лёгкого режима — без стратегии; событие-экстракция режима "со стратегией" —
+с `strategy.md` (как в `events_strategy_analyzer.py`).
+
+### Варианты подачи (смысловые углы)
+
+Формат из Claude/Gemini: `[{"name": "...", "angle": "..."}]`
+Это углы раскрытия идеи (НЕ форматы съёмки). Хранятся в `_idea_context[user_id]["approaches"]`.
+
+### Форматы Reels (нарративные структуры)
+
+Формат из Claude/Gemini: `[{"format": "...", "logic": "...", "duration": "...", "hook": "..."}]`
+Это КАК мысль раскрывается структурно (До/после, Парадокс, Монолог и т.д.) — НЕ инструкции по съёмке.
+Хранятся в `_idea_context[user_id]["reels_format"]`.
+
+## Контекст пользователя в боте (_idea_context)
+
+```python
+_idea_context[user_id] = {
+    "idea_id": int,
+    "refined_thesis": str,      # уточнённая суть (заменяет оригинальный thesis)
+    "selected_approach": str,   # выбранный угол подачи (name + angle)
+    "approaches": list[dict],   # сгенерированные варианты подачи
+    "reels_format": dict,       # выбранный формат Reels (format/logic/duration/hook)
+}
+```
+Читается в `post_writer.py` и `format_writer.py` при генерации — подставляет refined_thesis и selected_approach в промпт.
 
 ## Контракты между этапами
 
@@ -48,6 +131,7 @@ mood-diary Turso                 Telegram @nikbase (Telethon)
 | 01-knowledge-base | 02-analyzer | Turso `cb_diary_vectors` | source_id, content_chunk, embedding BLOB |
 | 01-knowledge-base | 02-analyzer | Turso `cb_social_posts/vectors` | source_type, content, url |
 | 02-analyzer | 03-bot | Turso `cb_ideas` | title, thesis, status='new' |
+| 03-bot (голос/текст) | 03-bot | Turso `cb_ideas` | source_type='voice', статус='new' |
 | 03-bot | экосистема | Turso `cb_published_posts` | post_text, published_at |
 | 03-bot | @nikbase | `channel_post` handler | автосбор новых постов в cb_social_posts |
 
@@ -58,7 +142,7 @@ mood-diary Turso                 Telegram @nikbase (Telethon)
 ### cb_diary_vectors
 ```sql
 id INTEGER PK, source_id TEXT UNIQUE,  -- 'entry_{date}' | 'msg_{id}'
-content_chunk TEXT, embedding BLOB,    -- float32[] numpy SHA-256-seeded
+content_chunk TEXT, embedding BLOB,
 entry_date TEXT, created_at TEXT
 ```
 
@@ -75,14 +159,20 @@ id INTEGER PK, social_post_id INTEGER, source_id TEXT UNIQUE,
 content_chunk TEXT, embedding BLOB, created_at TEXT
 ```
 
-### cb_ideas (контракт 02 → 03)
+### cb_ideas (контракт 02 → 03 и голосовой захват)
 ```sql
 id INTEGER PK, title TEXT, thesis TEXT,
 relevant_history TEXT,  -- JSON source_ids
 relevant_social TEXT,   -- JSON source_ids
 source_entries TEXT,    -- JSON ['2026-05-30', ...]
+source_type TEXT,       -- 'analyzer' | 'voice'
 status TEXT DEFAULT 'new',  -- 'new'|'shown'|'used'|'dismissed'
 created_at TEXT
+```
+
+### cb_voice_captures (сырые голосовые/текстовые заметки)
+```sql
+id INTEGER PK, raw_text TEXT, created_at TEXT
 ```
 
 ### cb_published_posts
@@ -108,25 +198,42 @@ messages — id, entry_date, role ('user'|'gemini_import'), content, created_at
 | `TURSO_MOOD_URL` / `TURSO_MOOD_TOKEN` | 01, 02 | mood-diary (read-only) |
 | `TURSO_CONTENT_BRAIN_URL` / `TURSO_CONTENT_BRAIN_TOKEN` | 01, 02, 03 | content-brain DB |
 | `NLM_NOTEBOOK_ID` | 02 | `1eb35d64-3e12-4dc9-8043-f65d703d6281` |
+| `NLM_FRESH_NOTEBOOK_ID` | 02, 03 | `6ed2bc91-8fb5-4eca-a881-324f6db90db1` |
 | `CONTENT_BRAIN_BOT_TOKEN` | 03 | токен бота |
 | `TG_API_ID` / `TG_API_HASH` | 01 | кампейн-аккаунт: `33361321` / `67a7d...` |
 | `TG_CHANNEL_USERNAME` | 01, 03 | `nikbase` |
-| `GROQ_API_KEY` | 01 | транскрипция голосовых |
+| `GROQ_API_KEY` | 01, 03 | транскрипция голосовых |
 | `TELEGRAM_USER_ID` | 03 | `5950805456` |
+| `FINLAND_WHISPER_URL` | 03 | fallback-транскрипция (http://2.26.85.234:5000/transcribe) |
 
 ## Ключевые технические решения
 
 **libsql_experimental** (не libsql_client) — sync API с local replica:
 ```python
 conn = libsql.connect("replica.db", sync_url=URL, auth_token=TOKEN)
-conn.sync()   # pull
-conn.commit(); conn.sync()  # push после записи
+conn.sync()               # pull
+conn.commit(); conn.sync() # push после записи
 ```
 
 **Claude CLI** (не Anthropic SDK) — без API-ключа, через подписку:
 ```python
-subprocess.run(["claude", "-p", prompt, "--model", "claude-sonnet-4-6"],
-               capture_output=True, text=True, env={**os.environ, "HOME": ...})
+subprocess.run(["claude", "-p", "--system-prompt", SYSTEM, "--model", "claude-sonnet-4-6"],
+               input=user_prompt, capture_output=True, text=True,
+               env={**os.environ, "HOME": ...}, cwd=WORK_DIR)
+```
+Сессионность через `--resume SESSION_ID` — передаётся для фидбека/перегенерации.
+
+**Antigravity CLI (Gemini)** — альтернативный движок:
+```python
+subprocess.run(["/snap/bin/antigravity-cli", "-p", full_prompt,
+                "--dangerously-skip-permissions", "--conversation", conv_id], ...)
+```
+⚠️ ВАЖНО: с `--conversation` antigravity возвращает в stdout ВЕСЬ разговор (все предыдущие
+ответы + новый). Фикс: стрипаем через `prev_text[-200:]` anchor + `rfind`:
+```python
+idx = output.rfind(anchor)
+if idx != -1:
+    output = output[idx + len(anchor):].strip()
 ```
 
 **NotebookLM** — семантический поиск через nlm CLI:
@@ -137,37 +244,30 @@ subprocess.run([NLM_BIN, "notebook", "query", NOTEBOOK_ID, question], ...)
 
 **Telethon два прохода** — сначала транскрибируем голосовые (без DB), потом пишем в свежее соединение. Иначе Turso-стрим падает по таймауту при длинной транскрипции.
 
+**Транскрипция в боте** — трёхуровневая: Groq → Finland VPS → faster-whisper tiny (локально).
+
 **Анализатор двухэтапный:**
 1. Claude → смыслы (тип, стратегическое соответствие, нужна ли предыстория)
 2. Для `needs_history=true` → `nlm notebook query` с конкретным вопросом
 3. Claude → 3-5 идей постов на основе смыслов + исторического контекста
 
-## NotebookLM — авторизация
-
-Cookies истекают, нужно периодически переавторизовываться:
-
-1. На MacBook запустить Chrome: `/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-nlm`
-2. SSH-туннель: `ssh -R 18800:localhost:9222 ubuntu@<SERVER_IP>`
-3. На сервере: `~/.local/bin/nlm login --provider openclaw --cdp-url http://127.0.0.1:18800`
-
 ## NotebookLM — два ноутбука
 
 | Ноутбук | ID | Назначение |
 |---------|----|-----------|
-| `content-brain` (архив) | `1eb35d64-3e12-4dc9-8043-f65d703d6281` | Весь исторический контекст |
-| `content-brain-fresh` | `6ed2bc91-8fb5-4eca-a881-324f6db90db1` | Свежие Gemini-переписки (вручную) |
+| `content-brain` (архив) | `1eb35d64-3e12-4dc9-8043-f65d703d6281` | Весь исторический контекст — автообновляется |
+| `content-brain-fresh` | `6ed2bc91-8fb5-4eca-a881-324f6db90db1` | Свежие Gemini-переписки — управляется вручную |
 
 **Как работает анализатор с ноутбуками:**
-1. Запрашивает `content-brain-fresh` → извлекает смыслы из свежих Gemini-переписок (первичный источник)
-2. Запрашивает `content-brain` (архив) → ищет историческую глубину по темам дневника
+1. Запрашивает `content-brain-fresh` → извлекает смыслы из свежих Gemini-переписок
+2. Запрашивает `content-brain` (архив) → ищет историческую глубину
 
-**Управление `content-brain-fresh`:**
-- Добавляй свежие переписки с Gemini вручную через notebooklm.google.com
-- Когда переписка устарела — удали из fresh (исторический контекст подхватит архив)
+**Авторизация (cookies истекают):**
+1. MacBook: `/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-nlm`
+2. SSH-туннель: `ssh -R 18800:localhost:9222 ubuntu@<SERVER_IP>`
+3. На сервере: `~/.local/bin/nlm login --provider openclaw --cdp-url http://127.0.0.1:18800`
 
 ## NotebookLM — автообновление
-
-Архивный ноутбук обновляется **автоматически**:
 
 ```
 Воскресенье 03:00 MSK → nlm_updater.py
@@ -177,7 +277,6 @@ Cookies истекают, нужно периодически переавтор
 
 1-е число 03:00 MSK → nlm_updater.py --monthly
   - Всё выше + сырые записи дневника за прошлый месяц
-    ("Дневник — сырые записи YYYY-MM") → 12 источников в год
 ```
 
 Лог: `/home/ubuntu/content-brain-nlm-update.log`
@@ -191,9 +290,9 @@ Cookies истекают, нужно периодически переавтор
 | content-brain-analyzer-expert | `.claude/agents/content-brain-analyzer-expert.md` | `02-analyzer/` |
 | content-brain-bot-expert | `.claude/agents/content-brain-bot-expert.md` | `03-bot/` |
 
-## Что нужно сделать вручную
+## Что нужно периодически
 
-- [ ] Заполнить `03-bot/strategy.md` — позиционирование, тон голоса, примеры постов
-- [ ] Добавить бота в @nikbase как администратора (для channel_monitor)
-- [ ] Запустить YouTube-импорт с MacBook (`scripts/youtube_import.py`)
-- [ ] Настроить cron или systemd для периодического запуска analyzer.py
+- **NLM авторизация** — cookies истекают, нужен SSH-туннель с Mac (см. выше)
+- **content-brain-fresh** — добавлять свежие Gemini-переписки вручную через notebooklm.google.com
+- **YouTube-импорт** — запускать с MacBook (`scripts/youtube_import.py`)
+- **strategy.md** — уже заполнен (222 строки), обновлять при смене позиционирования

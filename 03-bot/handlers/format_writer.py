@@ -8,6 +8,7 @@ handlers/format_writer.py — генерация Reels/Shorts и YouTube сце�
 import asyncio
 import json
 import os
+import subprocess
 from datetime import datetime
 from pathlib import Path
 
@@ -27,6 +28,7 @@ _reels_drafts: dict[int, dict] = {}    # user_id → {idea_id, draft, engine, se
 _youtube_drafts: dict[int, dict] = {}  # user_id → {idea_id, draft, engine, session_id, conv_id}
 _awaiting_reels_feedback: dict[int, bool] = {}
 _awaiting_youtube_feedback: dict[int, bool] = {}
+_pending_reels_formats: dict[int, dict] = {}  # user_id → {idea_id, formats: list[dict]}
 
 
 # ─── DB helpers ───────────────────────────────────────────────────────────────
@@ -66,23 +68,87 @@ def _fetch_idea_and_diary(idea_id: int):
     return title, thesis, raw
 
 
+# ─── Reels format generation ──────────────────────────────────────────────────
+
+_REELS_FORMAT_SYSTEM = """Предложи 2-3 формата для раскрытия идеи в коротком видео (Reels/Shorts, до 60 сек).
+
+Формат — это НЕ как снимать. Формат — это КАК именно мысль раскрывается структурно.
+Не пиши про кадры, камеру, b-roll, руки в кадре — только нарративная логика.
+
+Примеры форматов:
+- До/после — начинаешь с одного убеждения/состояния, заканчиваешь противоположным
+- Парадокс-разворот — заявляешь что-то контринтуитивное, объясняешь почему это правда
+- Один момент под лупой — берёшь один конкретный момент и разворачиваешь изнутри
+- Признание + переворот — "я думал X, оказалось Y"
+- Вопрос без ответа — задаёшь вопрос, который зритель унесёт с собой
+- Сравнение двух подходов — показываешь как выглядит "так" и "иначе"
+- Юмор через узнавание — доводишь знакомый паттерн до абсурда
+
+Ответ строго JSON без markdown:
+[{"format": "Название (2-4 слова)", "logic": "Как мысль раскрывается структурно (1-2 предложения)", "duration": "~XX сек", "hook": "Первая фраза конкретно под эту идею"}]"""
+
+
+def _parse_formats(text: str, tag: str) -> list[dict]:
+    try:
+        if "```" in text:
+            text = text[text.index("["):text.rindex("]") + 1]
+        return json.loads(text)
+    except Exception as e:
+        print(f"[{tag}] parse error: {e}, raw: {text[:200]}")
+        return []
+
+
+def _gen_reels_formats_sync(title: str, thesis: str, selected_approach: str) -> list[dict]:
+    from handlers.post_writer import CLAUDE_MODEL, _WORK_DIR
+    env = {**os.environ, "HOME": os.path.expanduser("~")}
+    approach_block = f"\nВыбранный угол: {selected_approach}" if selected_approach else ""
+    inp = f"Идея: {title}\nСуть: {thesis}{approach_block}"
+    result = subprocess.run(
+        ["claude", "-p", "--system-prompt", _REELS_FORMAT_SYSTEM, "--model", CLAUDE_MODEL],
+        input=inp, capture_output=True, text=True, env=env, timeout=60, cwd=_WORK_DIR,
+    )
+    return _parse_formats(result.stdout.strip(), "reels-formats")
+
+
+def _gen_reels_formats_agy_sync(title: str, thesis: str, selected_approach: str) -> list[dict]:
+    from handlers.post_writer import _call_agy_sync
+    approach_block = f"\nВыбранный угол: {selected_approach}" if selected_approach else ""
+    prompt = f"{_REELS_FORMAT_SYSTEM}\n\n---\n\nИдея: {title}\nСуть: {thesis}{approach_block}"
+    text, _ = _call_agy_sync(prompt)
+    return _parse_formats(text, "reels-formats-agy")
+
+
 # ─── Prompt builders ──────────────────────────────────────────────────────────
 
-def _reels_prompt(title: str, thesis: str, raw: list[str]) -> tuple[str, str]:
+def _reels_prompt(title: str, thesis: str, raw: list[str], selected_approach: str = "", reels_format: dict | None = None) -> tuple[str, str]:
     from prompts_reels import get_reels_system
     diary = "\n\n---\n".join(raw[:5]) if raw else "[Сырых записей нет — пиши строго по тезису]"
+    approach_block = f"\n\nВЫБРАННЫЙ УГОЛ ПОДАЧИ:\n{selected_approach}" if selected_approach else ""
+    format_block = ""
+    if reels_format:
+        logic = reels_format.get("logic") or reels_format.get("mechanic", "")
+        format_block = (
+            f"\n\nФОРМАТ РОЛИКА (строго следуй этому формату — это главное ограничение):\n"
+            f"Тип: {reels_format['format']}\n"
+            f"Логика раскрытия: {logic}\n"
+            f"Хронометраж: {reels_format['duration']}\n"
+            f"Первая фраза: {reels_format['hook']}"
+        )
     user = (
         f"Идея: {title}\n\nТезис (используй из записей только то, что развивает эту мысль):\n{thesis}"
+        f"{approach_block}{format_block}"
         f"\n\nСЫРЫЕ ЗАПИСИ АВТОРА:\n---\n{diary}\n---\n\nСценарий Reels:"
     )
     return get_reels_system(), user
 
 
-def _youtube_prompt(title: str, thesis: str, raw: list[str]) -> tuple[str, str]:
+def _youtube_prompt(title: str, thesis: str, raw: list[str], selected_approach: str = "") -> tuple[str, str]:
     from prompts_youtube import get_youtube_system
     diary = "\n\n---\n".join(raw[:5]) if raw else "[Сырых записей нет — пиши строго по тезису]"
+    approach_block = f"\n\nВЫБРАННЫЙ УГОЛ ПОДАЧИ (строго следуй):\n{selected_approach}" if selected_approach else ""
     user = (
         f"Идея: {title}\n\nТезис:\n{thesis}"
+        f"{approach_block}"
         f"\n\nСЫРЫЕ ЗАПИСИ АВТОРА:\n---\n{diary}\n---\n\nСтруктура ролика:"
     )
     return get_youtube_system(), user
@@ -153,7 +219,19 @@ async def _gen_reels(callback: CallbackQuery, idea_id: int, engine: str):
         return
     tag = "🤖 [Gemini]" if engine == "gemini" else "📓 [Claude]"
     await callback.message.answer(f"{tag} Пишу сценарий Reels...")
-    system, user = _reels_prompt(title, thesis, raw)
+
+    from handlers.ideas import _idea_context, _ctx_thesis
+    user_id = callback.from_user.id
+    thesis = _ctx_thesis(user_id, idea_id, thesis)
+    ctx = _idea_context.get(user_id, {})
+    if ctx.get("idea_id") == idea_id:
+        selected_approach = ctx.get("selected_approach", "")
+        reels_format = ctx.get("reels_format", None)
+    else:
+        selected_approach = ""
+        reels_format = None
+
+    system, user = _reels_prompt(title, thesis, raw, selected_approach, reels_format)
     loop = asyncio.get_event_loop()
     if engine == "gemini":
         text, conv_id = await loop.run_in_executor(None, _gemini, f"{system}\n\n---\n\n{user}")
@@ -174,7 +252,14 @@ async def _gen_youtube(callback: CallbackQuery, idea_id: int, engine: str):
         return
     tag = "🤖 [Gemini]" if engine == "gemini" else "📓 [Claude]"
     await callback.message.answer(f"{tag} Пишу структуру YouTube ролика...")
-    system, user = _youtube_prompt(title, thesis, raw)
+
+    from handlers.ideas import _idea_context, _ctx_thesis
+    user_id = callback.from_user.id
+    thesis = _ctx_thesis(user_id, idea_id, thesis)
+    ctx = _idea_context.get(user_id, {})
+    selected_approach = ctx.get("selected_approach", "") if ctx.get("idea_id") == idea_id else ""
+
+    system, user = _youtube_prompt(title, thesis, raw, selected_approach)
     loop = asyncio.get_event_loop()
     if engine == "gemini":
         text, conv_id = await loop.run_in_executor(None, _gemini, f"{system}\n\n---\n\n{user}")
@@ -193,23 +278,110 @@ async def _gen_youtube(callback: CallbackQuery, idea_id: int, engine: str):
 @router.callback_query(lambda c: c.data and c.data.startswith("platform:reels:"))
 async def cb_platform_reels(callback: CallbackQuery):
     idea_id = int(callback.data.split(":")[2])
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📓 Форматы через Claude", callback_data=f"gen_reels_formats:claude:{idea_id}"),
+         InlineKeyboardButton(text="🤖 Форматы через Gemini", callback_data=f"gen_reels_formats:agy:{idea_id}")],
+        [InlineKeyboardButton(text="↩️ Назад", callback_data=f"idea:{idea_id}")],
+    ])
+    await callback.message.edit_text(
+        "<i>📹 Reels — выбери движок для подбора форматов:</i>",
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+async def _do_gen_reels_formats(callback: CallbackQuery, idea_id: int, engine: str):
+    """Общая логика генерации форматов Reels."""
+    user_id = callback.from_user.id
     conn = _get_cb_db()
     row = conn.execute("SELECT title, thesis FROM cb_ideas WHERE id = ?", (idea_id,)).fetchone()
     conn.close()
     if not row:
-        await callback.answer("Идея не найдена.")
         return
+    title, original_thesis = row[0], row[1]
+
+    from handlers.ideas import _idea_context, _ctx_thesis
+    thesis = _ctx_thesis(user_id, idea_id, original_thesis)
+    ctx = _idea_context.get(user_id, {})
+    selected_approach = ctx.get("selected_approach", "") if ctx.get("idea_id") == idea_id else ""
+
+    tag = "🤖 [Gemini]" if engine == "agy" else "📓 [Claude]"
+    msg = await callback.message.answer(f"{tag} Подбираю форматы...")
+
+    loop = asyncio.get_event_loop()
+    if engine == "agy":
+        formats = await loop.run_in_executor(None, _gen_reels_formats_agy_sync, title, thesis, selected_approach)
+    else:
+        formats = await loop.run_in_executor(None, _gen_reels_formats_sync, title, thesis, selected_approach)
+
+    if not formats:
+        await msg.edit_text("Не удалось подобрать форматы — попробуй снова.")
+        return
+
+    _pending_reels_formats[user_id] = {"idea_id": idea_id, "formats": formats}
+
+    lines = ["<b>В каком формате снимем?</b>\n"]
+    buttons = []
+    for i, f in enumerate(formats):
+        logic = f.get("logic") or f.get("mechanic", "")
+        lines.append(f"<b>{i + 1}. {f['format']}</b> <i>({f['duration']})</i>\n{logic}\n→ <i>{f['hook']}</i>\n")
+        buttons.append([InlineKeyboardButton(
+            text=f"{i + 1}. {f['format']} ({f['duration']})",
+            callback_data=f"select_reels_format:{idea_id}:{i}",
+        )])
+    buttons.append([
+        InlineKeyboardButton(text="🔄 Ещё (Claude)", callback_data=f"gen_reels_formats:claude:{idea_id}"),
+        InlineKeyboardButton(text="🤖 Ещё (Gemini)", callback_data=f"gen_reels_formats:agy:{idea_id}"),
+    ])
+    buttons.append([InlineKeyboardButton(text="↩️ Назад", callback_data=f"idea:{idea_id}")])
+
+    await msg.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML")
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("gen_reels_formats:"))
+async def cb_gen_reels_formats(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    engine, idea_id = parts[1], int(parts[2])
+    await callback.answer()
+    await _do_gen_reels_formats(callback, idea_id, engine)
+
+
+@router.callback_query(lambda c: c.data and c.data.startswith("select_reels_format:"))
+async def cb_select_reels_format(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    parts = callback.data.split(":")
+    idea_id, idx = int(parts[1]), int(parts[2])
+
+    pending = _pending_reels_formats.get(user_id, {})
+    formats = pending.get("formats", []) if pending.get("idea_id") == idea_id else []
+
+    if not formats or idx >= len(formats):
+        await callback.answer("Формат не найден — перегенерируй.")
+        return
+
+    selected = formats[idx]
+
+    from handlers.ideas import _idea_context
+    ctx = _idea_context.setdefault(user_id, {"idea_id": idea_id, "refined_thesis": "", "selected_approach": "", "approaches": [], "lens_thesis": ""})
+    ctx["reels_format"] = selected
+    ctx.setdefault("idea_id", idea_id)
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📓 Claude", callback_data=f"write_reels:{idea_id}"),
          InlineKeyboardButton(text="🤖 Gemini", callback_data=f"write_reels_agy:{idea_id}")],
         [InlineKeyboardButton(text="⚡ Оба сразу", callback_data=f"write_reels_both:{idea_id}")],
-        [InlineKeyboardButton(text="↩️ Назад", callback_data=f"idea:{idea_id}")],
+        [InlineKeyboardButton(text="🔄 Другой формат", callback_data=f"platform:reels:{idea_id}"),
+         InlineKeyboardButton(text="↩️ Назад", callback_data=f"idea:{idea_id}")],
     ])
+    logic = selected.get("logic") or selected.get("mechanic", "")
     await callback.message.edit_text(
-        f"<b>{row[0]}</b>\n\n<i>📹 Reels / Shorts — выбери движок:</i>",
+        f"<b>Формат:</b> {selected['format']} ({selected['duration']})\n"
+        f"<i>{logic}</i>\n\n"
+        f"<b>Первая фраза:</b> <i>{selected['hook']}</i>\n\n"
+        f"Выбери движок для сценария:",
         reply_markup=keyboard,
     )
-    await callback.answer()
+    await callback.answer("Формат выбран ✓")
 
 
 @router.callback_query(lambda c: c.data and c.data.startswith("platform:youtube:"))

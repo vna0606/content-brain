@@ -383,9 +383,16 @@ async def _generate_and_send(callback: CallbackQuery, idea_id: int, mode: str):
 
     print(f"[post_writer][{mode}] diary={len(raw_messages)}, gemini={len(gemini_messages)}, nlm={len(nlm_quotes)}")
 
+    # Подхватываем уточнённый тезис (включая линзу) и выбранный угол из экрана смысла
+    from handlers.ideas import _idea_context, _ctx_thesis
+    user_id = callback.from_user.id
+    thesis = _ctx_thesis(user_id, idea_id, thesis)
+    ctx = _idea_context.get(user_id, {})
+    selected_approach = ctx.get("selected_approach", "") if ctx.get("idea_id") == idea_id else ""
+
     from prompts import get_post_writer_system, build_post_prompt
     system = get_post_writer_system()
-    user_prompt = build_post_prompt(title, thesis, raw_messages, social_chunks, gemini_messages, nlm_quotes)
+    user_prompt = build_post_prompt(title, thesis, raw_messages, social_chunks, gemini_messages, nlm_quotes, selected_approach)
 
     loop = asyncio.get_event_loop()
     post_text, session_id = await loop.run_in_executor(None, _call_claude_sync, system, user_prompt)
@@ -563,9 +570,16 @@ async def _generate_agy_and_send(callback: CallbackQuery, idea_id: int, mode: st
         loop = asyncio.get_event_loop()
         nlm_quotes = await loop.run_in_executor(None, _get_archive_context_from_nlm, thesis)
 
+    # Подхватываем уточнённый тезис (включая линзу) и выбранный угол из экрана смысла
+    from handlers.ideas import _idea_context, _ctx_thesis
+    user_id = callback.from_user.id
+    thesis = _ctx_thesis(user_id, idea_id, thesis)
+    ctx = _idea_context.get(user_id, {})
+    selected_approach = ctx.get("selected_approach", "") if ctx.get("idea_id") == idea_id else ""
+
     from prompts import get_post_writer_system, build_post_prompt
     system = get_post_writer_system()
-    user_prompt = build_post_prompt(title, thesis, raw_messages, [], [], nlm_quotes)
+    user_prompt = build_post_prompt(title, thesis, raw_messages, [], [], nlm_quotes, selected_approach)
     full_prompt = f"{system}\n\n---\n\n{user_prompt}"
 
     print(f"[agy][{mode}] diary={len(raw_messages)}, nlm={len(nlm_quotes)}")
@@ -850,7 +864,16 @@ async def on_feedback_voice(message: Message, bot: Bot):
     is_reels = _awaiting_reels_feedback.get(user_id)
     is_youtube = _awaiting_youtube_feedback.get(user_id)
 
-    if not any([is_claude, is_agy, is_reels, is_youtube]):
+    from handlers.ideas import _awaiting_thesis, process_thesis_input
+    is_thesis = _awaiting_thesis.get(user_id)
+
+    from handlers.events import _awaiting_event_feedback, process_event_feedback
+    is_event = _awaiting_event_feedback.get(user_id)
+
+    from handlers.events_strategy import _awaiting_event_s_feedback, process_event_s_feedback
+    is_event_s = _awaiting_event_s_feedback.get(user_id)
+
+    if not any([is_claude, is_agy, is_reels, is_youtube, is_thesis, is_event, is_event_s]):
         from handlers.capture import handle_voice_capture
         await handle_voice_capture(message, bot)
         return
@@ -866,7 +889,9 @@ async def on_feedback_voice(message: Message, bot: Bot):
         return
     await message.answer(f"📝 Распознал: {feedback}")
 
-    if is_agy:
+    if is_thesis:
+        await process_thesis_input(message, user_id, feedback)
+    elif is_agy:
         await _process_agy_feedback(message, user_id, feedback)
     elif is_claude:
         await _process_feedback(message, user_id, feedback)
@@ -874,21 +899,38 @@ async def on_feedback_voice(message: Message, bot: Bot):
         await process_reels_feedback(message, user_id, feedback)
     elif is_youtube:
         await process_youtube_feedback(message, user_id, feedback)
+    elif is_event:
+        await process_event_feedback(message, user_id, feedback)
+    elif is_event_s:
+        await process_event_s_feedback(message, user_id, feedback)
 
 
 @router.message(F.text)
 async def on_feedback_text(message: Message):
     """Текстовый фидбэк — роутит к Claude, Antigravity или Reels/YouTube."""
     user_id = message.from_user.id
-    if _agy_awaiting_feedback.get(user_id):
-        await _process_agy_feedback(message, user_id, message.text.strip())
+    text = message.text.strip()
+    from handlers.ideas import _awaiting_thesis, process_thesis_input
+    if _awaiting_thesis.get(user_id):
+        await process_thesis_input(message, user_id, text)
+    elif _agy_awaiting_feedback.get(user_id):
+        await _process_agy_feedback(message, user_id, text)
     elif _awaiting_feedback.get(user_id):
-        await _process_feedback(message, user_id, message.text.strip())
+        await _process_feedback(message, user_id, text)
     else:
         from handlers.format_writer import _awaiting_reels_feedback, _awaiting_youtube_feedback, process_reels_feedback, process_youtube_feedback
+        from handlers.events import _awaiting_event_feedback, process_event_feedback
+        from handlers.events_strategy import _awaiting_event_s_feedback, process_event_s_feedback
         if _awaiting_reels_feedback.get(user_id):
-            await process_reels_feedback(message, user_id, message.text.strip())
+            await process_reels_feedback(message, user_id, text)
         elif _awaiting_youtube_feedback.get(user_id):
-            await process_youtube_feedback(message, user_id, message.text.strip())
+            await process_youtube_feedback(message, user_id, text)
+        elif _awaiting_event_feedback.get(user_id):
+            await process_event_feedback(message, user_id, text)
+        elif _awaiting_event_s_feedback.get(user_id):
+            await process_event_s_feedback(message, user_id, text)
+        else:
+            from handlers.capture import handle_text_capture
+            await handle_text_capture(message)
 
 
